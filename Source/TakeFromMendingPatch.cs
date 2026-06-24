@@ -10,8 +10,36 @@ using UnityEngine;
 using Verse;
 using Verse.AI;
 
-// Applies Take It To Storage! "Take from" bill setting to ingredient search.
-// Without this patch, MendAndRecycle (and sometimes vanilla) search the whole map and ignore the selected stockpile.
+/*
+ * TakeFromMendingPatch
+ *
+ * Problem:
+ * The "Take It To Storage!" mod (HaulToBuilding) adds a per-bill "Take from" stockpile list
+ * (stored in ExtraBillData.TakeFrom) to restrict where pawns pick up bill ingredients.
+ * HaulToBuilding patches vanilla RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients for
+ * standard crafting, but Core SK MendAndRecycle replaces that flow for mend/recycle bills with
+ * Mending.WorkGiver_DoBill, which searches the whole map via GenClosest.ClosestThingReachable
+ * and never reads TakeFrom. In HSK the same symptom can also appear on ordinary bills when
+ * ExtraBillData is keyed to a different Bill instance than the one used at job time (e.g.
+ * Better Workbench Management linked or mirrored bills): TakeFrom looks configured in the UI,
+ * yet pawns still haul from the nearest stockpile on the map.
+ *
+ * Solution:
+ * Harmony prefixes (and a vanilla postfix safety net) intercept ingredient search before the
+ * unconstrained path runs. When TakeFrom is non-empty, ExtraBillData is resolved for the active
+ * bill (direct lookup, siblings on the same BillStack, same workbench, or same recipe on the
+ * map), candidate things are gathered only from the selected storages (slot HeldThings plus items
+ * on stockpile zone cells), validated like vanilla, and chosen from that set only. Mend bills
+ * use the same TakeFrom list but Mending-specific ingredient rules. If another mod already
+ * returned ingredients from a disallowed storage, the postfix reruns the constrained search.
+ *
+ * Why this approach:
+ * MendAndRecycle cannot be fixed without forking it, and HaulToBuilding's UI or data storage
+ * need not be duplicated. Patching the shared choke point (TryFindBestBillIngredients) restores
+ * the intended TakeFrom behavior for both code paths with minimal surface area, while extra
+ * bill-resolution logic addresses reference mismatches that HaulToBuilding alone does not handle
+ * reliably in linked-bill setups.
+ */
 namespace HSK.TakeFromMendingPatch
 {
     public class TakeFromMendingPatchMod : Mod
