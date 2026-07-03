@@ -46,16 +46,14 @@ namespace HSK.TakeFromMendingPatch
     {
         private const string HarmonyId = "hsk.takefrom.mending.patch";
         private readonly TakeFromMendingPatchSettings settings;
-        public static Harmony HarmonyInstance;
-        private static FieldInfo extraBillDataDictionaryField;
+
         public TakeFromMendingPatchMod(ModContentPack content)
             : base(content)
         {
             settings = GetSettings<TakeFromMendingPatchSettings>();
-            HarmonyInstance = new Harmony(HarmonyId);
             try
             {
-                ApplyPatches();
+                new Harmony(HarmonyId).PatchAll();
                 Log.Message(
                     $"[TakeFromMendingPatch] Loaded (verbose logging {(TakeFromMendingPatchSettings.EnableLogging ? "ON" : "OFF")}). " +
                     "Enable logging in mod settings for ingredient-search details.");
@@ -65,55 +63,98 @@ namespace HSK.TakeFromMendingPatch
                 Log.Error("[TakeFromMendingPatch] Failed to apply patches: " + ex);
             }
         }
+
         public override string SettingsCategory()
         {
             return "HSK Take From Mending Patch";
         }
+
         public override void DoSettingsWindowContents(Rect inRect)
         {
             settings.DrawSettings(inRect);
         }
-        private static void ApplyPatches()
+    }
+
+    [HarmonyPatch(
+        typeof(RimWorld.WorkGiver_DoBill),
+        "TryFindBestBillIngredients",
+        new[]
         {
-            PatchVanillaWorkGiver();
-            PatchMendingWorkGiver();
-            PatchLog.Message("[TakeFromMendingPatch] Harmony patching completed.");
-        }
-        // Standard recipes (planks, meals, etc.) — RimWorld.WorkGiver_DoBill.
-        private static void PatchVanillaWorkGiver()
+            typeof(Bill),
+            typeof(Pawn),
+            typeof(Thing),
+            typeof(List<ThingCount>),
+            typeof(List<IngredientCount>)
+        })]
+    [HarmonyPriority(Priority.First)]
+    [HarmonyBefore("legodude17.HaulToBuilding")]
+    internal static class VanillaTryFindBestBillIngredientsPatch
+    {
+        private static readonly Type[] TargetParameterTypes =
         {
-            var target = AccessTools.Method(
-                typeof(RimWorld.WorkGiver_DoBill),
-                "TryFindBestBillIngredients",
-                new[]
-                {
-                    typeof(Bill),
-                    typeof(Pawn),
-                    typeof(Thing),
-                    typeof(List<ThingCount>),
-                    typeof(List<IngredientCount>)
-                });
-            if (target == null)
+            typeof(Bill),
+            typeof(Pawn),
+            typeof(Thing),
+            typeof(List<ThingCount>),
+            typeof(List<IngredientCount>)
+        };
+
+        private static bool Prepare()
+        {
+            if (AccessTools.Method(typeof(RimWorld.WorkGiver_DoBill), "TryFindBestBillIngredients", TargetParameterTypes) != null)
             {
-                Log.Error("[TakeFromMendingPatch] Could not find RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients.");
-                return;
+                return true;
             }
-            var prefix = new HarmonyMethod(typeof(TakeFromMendingPatchMod), nameof(VanillaTryFindBestBillIngredientsPrefix))
-            {
-                priority = Priority.First,
-                before = new[] { "legodude17.HaulToBuilding" }
-            };
-            var postfix = new HarmonyMethod(typeof(TakeFromMendingPatchMod), nameof(VanillaTryFindBestBillIngredientsPostfix))
-            {
-                priority = Priority.Last
-            };
-            HarmonyInstance.Patch(target, prefix: prefix, postfix: postfix);
-            Log.Message("[TakeFromMendingPatch] Patched RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients (prefix+postfix).");
+
+            Log.Error("[TakeFromMendingPatch] Could not find RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients.");
+            return false;
         }
-        // Mend/recycle bills — Mending has its own WorkGiver_DoBill with a global ingredient search.
-        private static void PatchMendingWorkGiver()
+
+        public static bool Prefix(
+            Bill bill,
+            Pawn pawn,
+            Thing billGiver,
+            List<ThingCount> chosen,
+            List<IngredientCount> missingIngredients,
+            ref bool __result)
         {
-            var target = AccessTools.Method(
+            return TakeFromMendingPatchLogic.VanillaPrefix(
+                bill,
+                pawn,
+                billGiver,
+                chosen,
+                missingIngredients,
+                ref __result);
+        }
+
+        [HarmonyPriority(Priority.Last)]
+        public static void Postfix(
+            Bill bill,
+            Pawn pawn,
+            Thing billGiver,
+            List<ThingCount> chosen,
+            List<IngredientCount> missingIngredients,
+            ref bool __result)
+        {
+            TakeFromMendingPatchLogic.VanillaPostfix(
+                bill,
+                pawn,
+                billGiver,
+                chosen,
+                missingIngredients,
+                ref __result);
+        }
+    }
+
+    [HarmonyPatch]
+    [HarmonyPriority(Priority.First)]
+    internal static class MendingTryFindBestBillIngredientsPatch
+    {
+        private static MethodBase targetMethod;
+
+        private static bool Prepare()
+        {
+            targetMethod = AccessTools.Method(
                 typeof(Mending.WorkGiver_DoBill),
                 "TryFindBestBillIngredients",
                 new[]
@@ -124,20 +165,45 @@ namespace HSK.TakeFromMendingPatch
                     typeof(bool),
                     typeof(Thing).MakeByRefType()
                 });
-            if (target == null)
+
+            if (targetMethod != null)
             {
-                Log.Error("[TakeFromMendingPatch] Could not find Mending.WorkGiver_DoBill.TryFindBestBillIngredients.");
-                return;
+                return true;
             }
-            var prefix = new HarmonyMethod(typeof(TakeFromMendingPatchMod), nameof(MendingTryFindBestBillIngredientsPrefix))
-            {
-                priority = Priority.First
-            };
-            HarmonyInstance.Patch(target, prefix: prefix);
-            Log.Message("[TakeFromMendingPatch] Patched Mending.WorkGiver_DoBill.TryFindBestBillIngredients.");
+
+            Log.Error("[TakeFromMendingPatch] Could not find Mending.WorkGiver_DoBill.TryFindBestBillIngredients.");
+            return false;
         }
+
+        private static MethodBase TargetMethod()
+        {
+            return targetMethod;
+        }
+
+        public static bool Prefix(
+            Bill bill,
+            Pawn pawn,
+            Thing billGiver,
+            bool ignoreHitPoints,
+            ref Thing chosen,
+            ref bool __result)
+        {
+            return TakeFromMendingPatchLogic.MendingPrefix(
+                bill,
+                pawn,
+                billGiver,
+                ignoreHitPoints,
+                ref chosen,
+                ref __result);
+        }
+    }
+
+    internal static class TakeFromMendingPatchLogic
+    {
+        private static FieldInfo extraBillDataDictionaryField;
+
         // When TakeFrom is set, search only selected storages; otherwise defer to vanilla + HaulToBuilding.
-        private static bool VanillaTryFindBestBillIngredientsPrefix(
+        internal static bool VanillaPrefix(
             Bill bill,
             Pawn pawn,
             Thing billGiver,
@@ -162,7 +228,7 @@ namespace HSK.TakeFromMendingPatch
                 ref __result);
         }
         // Safety net: if another mod picked ingredients from the wrong storage, rerun a constrained search.
-        private static void VanillaTryFindBestBillIngredientsPostfix(
+        internal static void VanillaPostfix(
             Bill bill,
             Pawn pawn,
             Thing billGiver,
@@ -257,7 +323,7 @@ namespace HSK.TakeFromMendingPatch
                 $"missing={DescribeMissingIngredients(missingIngredients)}");
             return false;
         }
-        private static bool MendingTryFindBestBillIngredientsPrefix(
+        internal static bool MendingPrefix(
             Bill bill,
             Pawn pawn,
             Thing billGiver,

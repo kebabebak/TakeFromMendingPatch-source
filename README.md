@@ -7,7 +7,7 @@ Files to compile `TakeFromMendingPatch.dll` for RimWorld HSK 1.5.
 ## Requirements
 
 - [.NET SDK](https://dotnet.microsoft.com/download) (builds `net48`)
-- Five reference DLLs in `libs/`
+- Two mod DLLs in `libs/` (`HaulToBuilding.dll`, `Mending.dll`; Harmony and RimWorld refs come from NuGet)
 
 ## Build
 
