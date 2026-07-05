@@ -53,7 +53,8 @@ namespace HSK.TakeFromMendingPatch
             settings = GetSettings<TakeFromMendingPatchSettings>();
             try
             {
-                new Harmony(HarmonyId).PatchAll();
+                // Bare PatchAll() resolves the caller assembly via stack trace; inlining or callbacks can skip patches silently.
+                new Harmony(HarmonyId).PatchAll(Assembly.GetExecutingAssembly());
                 Log.Message(
                     $"[TakeFromMendingPatch] Loaded (verbose logging {(TakeFromMendingPatchSettings.EnableLogging ? "ON" : "OFF")}). " +
                     "Enable logging in mod settings for ingredient-search details.");
