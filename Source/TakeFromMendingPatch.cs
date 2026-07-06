@@ -455,94 +455,118 @@ namespace HSK.TakeFromMendingPatch
                 PatchLog.Message($"[TakeFromMendingPatch] {route} skipped: GameComponent_ExtraBillData.Instance is null for {DescribeBill(bill, pawn, billGiver)}.");
                 return false;
             }
-            if (TryGetTakeFromFromData(component.GetData(bill, createIfMissing: false), out parents))
+
+            try
             {
-                resolution = "direct";
-                PatchLog.Message($"[TakeFromMendingPatch] {route} resolved TakeFrom via direct bill key: {DescribeParents(parents)}");
-                return true;
-            }
-            if (bill.billStack != null)
-            {
-                foreach (var other in bill.billStack.Bills)
+                if (TryGetTakeFromFromData(component.GetData(bill, createIfMissing: false), out parents))
                 {
-                    if (other == null || ReferenceEquals(other, bill))
+                    resolution = "direct";
+                    PatchLog.Message($"[TakeFromMendingPatch] {route} resolved TakeFrom via direct bill key: {DescribeParents(parents)}");
+                    return true;
+                }
+                if (bill.billStack != null)
+                {
+                    foreach (var other in bill.billStack.Bills)
+                    {
+                        if (other == null || ReferenceEquals(other, bill))
+                        {
+                            continue;
+                        }
+                        if (!IsBillDataKeyAlive(other))
+                        {
+                            PatchLog.Warning(
+                                $"[TakeFromMendingPatch] {route} skipped dead bill stack sibling for {DescribeBill(bill, pawn, billGiver)}.");
+                            continue;
+                        }
+                        if (TryGetTakeFromFromData(component.GetData(other, createIfMissing: false), out parents))
+                        {
+                            resolution = $"billStack:{other.Label}";
+                            PatchLog.Message(
+                                $"[TakeFromMendingPatch] {route} resolved TakeFrom via bill stack sibling «{other.Label}»: {DescribeParents(parents)}");
+                            return true;
+                        }
+                    }
+                }
+
+                int pruned = PruneStaleBillDataKeys(component, route);
+                if (pruned > 0)
+                {
+                    PatchLog.Message($"[TakeFromMendingPatch] {route} continuing TakeFrom fallback after pruning {pruned} stale bill key(s).");
+                }
+
+                foreach (var kv in EnumerateBillDataWithTakeFrom(component))
+                {
+                    var other = kv.Key;
+                    if (ReferenceEquals(other, bill) || other.recipe != bill.recipe)
                     {
                         continue;
                     }
-                    if (TryGetTakeFromFromData(component.GetData(other, createIfMissing: false), out parents))
+                    if (!TryGetTakeFromFromData(kv.Value, out var otherParents))
                     {
-                        resolution = $"billStack:{other.Label}";
+                        continue;
+                    }
+                    if (other.billStack?.billGiver == bill.billStack?.billGiver)
+                    {
+                        parents = otherParents;
+                        resolution = $"sameWorkbench:{other.Label}";
                         PatchLog.Message(
-                            $"[TakeFromMendingPatch] {route} resolved TakeFrom via bill stack sibling «{other.Label}»: {DescribeParents(parents)}");
+                            $"[TakeFromMendingPatch] {route} resolved TakeFrom via same workbench bill «{other.Label}»: {DescribeParents(parents)}");
                         return true;
                     }
                 }
-            }
-            foreach (var kv in EnumerateBillData(component))
-            {
-                var other = kv.Key;
-                if (other == null || ReferenceEquals(other, bill))
+                Map map = pawn?.Map ?? billGiver?.Map;
+                Bill bestMatch = null;
+                ExtraBillData bestData = null;
+                foreach (var kv in EnumerateBillDataWithTakeFrom(component))
                 {
-                    continue;
+                    var other = kv.Key;
+                    if (ReferenceEquals(other, bill) || other.recipe != bill.recipe)
+                    {
+                        continue;
+                    }
+                    if (map != null && other.billStack?.billGiver?.Map != map)
+                    {
+                        continue;
+                    }
+                    if (bestMatch == null || string.Equals(other.Label, bill.Label, StringComparison.Ordinal))
+                    {
+                        bestMatch = other;
+                        bestData = kv.Value;
+                    }
                 }
-                if (other.recipe != bill.recipe || !TryGetTakeFromFromData(kv.Value, out var otherParents))
+                if (bestMatch != null && TryGetTakeFromFromData(bestData, out parents))
                 {
-                    continue;
-                }
-                if (other.billStack?.billGiver == bill.billStack?.billGiver)
-                {
-                    parents = otherParents;
-                    resolution = $"sameWorkbench:{other.Label}";
+                    resolution = $"recipeMatch:{bestMatch.Label}";
                     PatchLog.Message(
-                        $"[TakeFromMendingPatch] {route} resolved TakeFrom via same workbench bill «{other.Label}»: {DescribeParents(parents)}");
+                        $"[TakeFromMendingPatch] {route} resolved TakeFrom via recipe match on «{bestMatch.Label}» " +
+                        $"(linked/mirrored bill): {DescribeParents(parents)}");
                     return true;
                 }
-            }
-            Map map = pawn?.Map ?? billGiver?.Map;
-            Bill bestMatch = null;
-            ExtraBillData bestData = null;
-            foreach (var kv in EnumerateBillData(component))
-            {
-                var other = kv.Key;
-                if (other == null || ReferenceEquals(other, bill) || other.recipe != bill.recipe)
+                var emptyDirect = component.GetData(bill, createIfMissing: false);
+                if (emptyDirect != null && (emptyDirect.TakeFrom == null || !emptyDirect.TakeFrom.Any()))
                 {
-                    continue;
+                    PatchLog.Message(
+                        $"[TakeFromMendingPatch] {route} skipped: TakeFrom is empty for {DescribeBill(bill, pawn, billGiver)} " +
+                        $"(TakeFromText={emptyDirect.TakeFromText()}).");
                 }
-                if (!TryGetTakeFromFromData(kv.Value, out _))
+                else
                 {
-                    continue;
+                    PatchLog.Message($"[TakeFromMendingPatch] {route} skipped: no ExtraBillData with TakeFrom for {DescribeBill(bill, pawn, billGiver)}.");
+                    LogBillDataDiagnostics(bill, component);
                 }
-                if (map != null && other.billStack?.billGiver?.Map != map)
-                {
-                    continue;
-                }
-                if (bestMatch == null || string.Equals(other.Label, bill.Label, StringComparison.Ordinal))
-                {
-                    bestMatch = other;
-                    bestData = kv.Value;
-                }
+                return false;
             }
-            if (bestMatch != null && TryGetTakeFromFromData(bestData, out parents))
+            catch (Exception ex)
             {
-                resolution = $"recipeMatch:{bestMatch.Label}";
-                PatchLog.Message(
-                    $"[TakeFromMendingPatch] {route} resolved TakeFrom via recipe match on «{bestMatch.Label}» " +
-                    $"(linked/mirrored bill): {DescribeParents(parents)}");
-                return true;
+                PatchLog.Warning(
+                    $"[TakeFromMendingPatch] {route} TakeFrom resolve failed for {DescribeBill(bill, pawn, billGiver)}: {ex}");
+                Log.WarningOnce(
+                    $"[TakeFromMendingPatch] TakeFrom resolve fail-open to vanilla ({route}): {ex.GetType().Name}: {ex.Message}",
+                    unchecked((int)0xb7e54d91));
+                parents = null;
+                resolution = null;
+                return false;
             }
-            var emptyDirect = component.GetData(bill, createIfMissing: false);
-            if (emptyDirect != null && (emptyDirect.TakeFrom == null || !emptyDirect.TakeFrom.Any()))
-            {
-                PatchLog.Message(
-                    $"[TakeFromMendingPatch] {route} skipped: TakeFrom is empty for {DescribeBill(bill, pawn, billGiver)} " +
-                    $"(TakeFromText={emptyDirect.TakeFromText()}).");
-            }
-            else
-            {
-                PatchLog.Message($"[TakeFromMendingPatch] {route} skipped: no ExtraBillData with TakeFrom for {DescribeBill(bill, pawn, billGiver)}.");
-                LogBillDataDiagnostics(bill, component);
-            }
-            return false;
         }
         private static bool TryGetTakeFromFromData(ExtraBillData extraData, out List<ISlotGroupParent> parents)
         {
@@ -554,21 +578,82 @@ namespace HSK.TakeFromMendingPatch
             parents = extraData.TakeFrom.Where(parent => parent != null).ToList();
             return parents.Count > 0;
         }
-        private static IEnumerable<KeyValuePair<Bill, ExtraBillData>> EnumerateBillData(GameComponent_ExtraBillData component)
+        private static bool IsBillDataKeyAlive(Bill bill)
+        {
+            if (bill == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return !bill.DeletedOrDereferenced;
+            }
+            catch (Exception ex)
+            {
+                PatchLog.Warning($"[TakeFromMendingPatch] Stale ExtraBillData bill key skipped: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static int PruneStaleBillDataKeys(GameComponent_ExtraBillData component, string route)
+        {
+            var dict = GetBillDataDictionary(component);
+            if (dict == null || dict.Count == 0)
+            {
+                return 0;
+            }
+
+            List<Bill> staleKeys = null;
+            foreach (Bill key in dict.Keys.ToList())
+            {
+                if (IsBillDataKeyAlive(key))
+                {
+                    continue;
+                }
+
+                staleKeys ??= new List<Bill>();
+                staleKeys.Add(key);
+            }
+
+            if (staleKeys == null)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < staleKeys.Count; i++)
+            {
+                dict.Remove(staleKeys[i]);
+            }
+
+            string message =
+                $"[TakeFromMendingPatch] Pruned {staleKeys.Count} stale ExtraBillData bill key(s) during {route} " +
+                $"(dictionary now {dict.Count} entries).";
+            PatchLog.MessageImportant(message);
+            Log.WarningOnce(message, unchecked((int)0xa3f12c80));
+            return staleKeys.Count;
+        }
+
+        private static IEnumerable<KeyValuePair<Bill, ExtraBillData>> EnumerateBillDataWithTakeFrom(
+            GameComponent_ExtraBillData component)
         {
             var dict = GetBillDataDictionary(component);
             if (dict == null)
             {
                 yield break;
             }
+
             foreach (var kv in dict)
             {
-                if (kv.Key != null && !kv.Key.DeletedOrDereferenced)
+                if (!IsBillDataKeyAlive(kv.Key) || !TryGetTakeFromFromData(kv.Value, out _))
                 {
-                    yield return kv;
+                    continue;
                 }
+
+                yield return kv;
             }
         }
+
         private static Dictionary<Bill, ExtraBillData> GetBillDataDictionary(GameComponent_ExtraBillData component)
         {
             if (component == null)
@@ -593,6 +678,12 @@ namespace HSK.TakeFromMendingPatch
             }
             foreach (var kv in dict)
             {
+                if (!IsBillDataKeyAlive(kv.Key))
+                {
+                    PatchLog.Message("[TakeFromMendingPatch]   bill entry: <stale/dead key skipped>");
+                    continue;
+                }
+
                 int takeFromCount = kv.Value?.TakeFrom?.Count ?? 0;
                 string recipe = kv.Key?.recipe?.defName ?? "<no recipe>";
                 string label = kv.Key?.Label ?? "<no label>";
@@ -970,6 +1061,11 @@ namespace HSK.TakeFromMendingPatch
             {
                 Log.Warning(text);
             }
+        }
+
+        public static void MessageImportant(string text)
+        {
+            Log.Message(text);
         }
     }
 }
