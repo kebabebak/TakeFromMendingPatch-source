@@ -42,6 +42,27 @@ using Verse.AI;
  */
 namespace HSK.TakeFromMendingPatch
 {
+    public static class ModCompatibility
+    {
+        private const string MendAndRecyclePackageId = "notfood.MendAndRecycle";
+
+        public static bool IsMendAndRecycleLoaded()
+        {
+            return IsPackageActive(MendAndRecyclePackageId);
+        }
+
+        private static bool IsPackageActive(string packageId)
+        {
+            if (ModsConfig.IsActive(packageId))
+            {
+                return true;
+            }
+
+            return LoadedModManager.RunningModsListForReading.Exists(
+                mod => string.Equals(mod.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     public class TakeFromMendingPatchMod : Mod
     {
         private const string HarmonyId = "hsk.takefrom.mending.patch";
@@ -76,21 +97,13 @@ namespace HSK.TakeFromMendingPatch
         }
     }
 
-    [HarmonyPatch(
-        typeof(RimWorld.WorkGiver_DoBill),
-        "TryFindBestBillIngredients",
-        new[]
-        {
-            typeof(Bill),
-            typeof(Pawn),
-            typeof(Thing),
-            typeof(List<ThingCount>),
-            typeof(List<IngredientCount>)
-        })]
+    [HarmonyPatch]
     [HarmonyPriority(Priority.First)]
     [HarmonyBefore("legodude17.HaulToBuilding")]
     internal static class VanillaTryFindBestBillIngredientsPatch
     {
+        private static MethodBase targetMethod;
+
         private static readonly Type[] TargetParameterTypes =
         {
             typeof(Bill),
@@ -102,13 +115,24 @@ namespace HSK.TakeFromMendingPatch
 
         private static bool Prepare()
         {
-            if (AccessTools.Method(typeof(RimWorld.WorkGiver_DoBill), "TryFindBestBillIngredients", TargetParameterTypes) != null)
+            targetMethod = AccessTools.Method(
+                typeof(RimWorld.WorkGiver_DoBill),
+                "TryFindBestBillIngredients",
+                TargetParameterTypes);
+            if (targetMethod != null)
             {
                 return true;
             }
 
-            Log.Error("[TakeFromMendingPatch] Could not find RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients.");
+            Log.ErrorOnce(
+                "[TakeFromMendingPatch] Could not find RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients.",
+                0x5a2b7c11);
             return false;
+        }
+
+        private static MethodBase TargetMethod()
+        {
+            return targetMethod;
         }
 
         public static bool Prefix(
@@ -155,6 +179,11 @@ namespace HSK.TakeFromMendingPatch
 
         private static bool Prepare()
         {
+            if (!ModCompatibility.IsMendAndRecycleLoaded())
+            {
+                return false;
+            }
+
             targetMethod = AccessTools.Method(
                 typeof(Mending.WorkGiver_DoBill),
                 "TryFindBestBillIngredients",
@@ -172,7 +201,9 @@ namespace HSK.TakeFromMendingPatch
                 return true;
             }
 
-            Log.Error("[TakeFromMendingPatch] Could not find Mending.WorkGiver_DoBill.TryFindBestBillIngredients.");
+            Log.WarningOnce(
+                "[TakeFromMendingPatch] MendAndRecycle is loaded but Mending.WorkGiver_DoBill.TryFindBestBillIngredients was not found.",
+                unchecked((int)0x8c41f903));
             return false;
         }
 
