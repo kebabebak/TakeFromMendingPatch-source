@@ -12,12 +12,6 @@ Files to compile `TakeFromMendingPatch.dll` for RimWorld HSK 1.5.
 ## Build
 
 ```powershell
-.\build.ps1
-```
-
-Or:
-
-```powershell
 dotnet build TakeFromMendingPatch.csproj -c Release
 ```
 
