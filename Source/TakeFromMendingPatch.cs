@@ -65,7 +65,7 @@ namespace HSK.TakeFromMendingPatch
 
     public class TakeFromMendingPatchMod : Mod
     {
-        private const string HarmonyId = "hsk.takefrom.mending.patch";
+        private const string HarmonyId = "kebabebak.takefrom.mending.patch";
         private readonly TakeFromMendingPatchSettings settings;
 
         public TakeFromMendingPatchMod(ModContentPack content)
