@@ -88,7 +88,7 @@ namespace HSK.TakeFromMendingPatch
 
         public override string SettingsCategory()
         {
-            return "HSK Take From Mending Patch";
+            return "TakeFromMendingPatch.SettingsCategory".Translate();
         }
 
         public override void DoSettingsWindowContents(Rect inRect)
@@ -629,8 +629,7 @@ namespace HSK.TakeFromMendingPatch
             string message =
                 $"[TakeFromMendingPatch] Pruned {staleKeys.Count} stale ExtraBillData bill key(s) during {route} " +
                 $"(dictionary now {dict.Count} entries).";
-            PatchLog.MessageImportant(message);
-            Log.WarningOnce(message, unchecked((int)0xa3f12c80));
+            PatchLog.Maintenance(message);
             return staleKeys.Count;
         }
 
@@ -1033,19 +1032,32 @@ namespace HSK.TakeFromMendingPatch
     public class TakeFromMendingPatchSettings : ModSettings
     {
         public static bool EnableLogging;
+        public static bool ShowMaintenanceMessages;
+
         public void DrawSettings(Rect inRect)
         {
             var listing = new Listing_Standard();
             listing.Begin(inRect);
-            listing.CheckboxLabeled("Enable logging", ref EnableLogging);
+            listing.CheckboxLabeled(
+                "TakeFromMendingPatch.EnableLogging".Translate(),
+                ref EnableLogging,
+                tooltip: "TakeFromMendingPatch.EnableLoggingTooltip".Translate());
+            listing.GapLine();
+            listing.CheckboxLabeled(
+                "TakeFromMendingPatch.ShowMaintenanceMessages".Translate(),
+                ref ShowMaintenanceMessages,
+                tooltip: "TakeFromMendingPatch.ShowMaintenanceMessagesTooltip".Translate());
             listing.End();
         }
+
         public override void ExposeData()
         {
             base.ExposeData();
             Scribe_Values.Look(ref EnableLogging, "EnableLogging", defaultValue: false);
+            Scribe_Values.Look(ref ShowMaintenanceMessages, "ShowMaintenanceMessages", defaultValue: false);
         }
     }
+
     public static class PatchLog
     {
         public static void Message(string text)
@@ -1055,6 +1067,7 @@ namespace HSK.TakeFromMendingPatch
                 Log.Message(text);
             }
         }
+
         public static void Warning(string text)
         {
             if (TakeFromMendingPatchSettings.EnableLogging)
@@ -1063,9 +1076,12 @@ namespace HSK.TakeFromMendingPatch
             }
         }
 
-        public static void MessageImportant(string text)
+        public static void Maintenance(string text)
         {
-            Log.Message(text);
+            if (TakeFromMendingPatchSettings.ShowMaintenanceMessages)
+            {
+                Log.Message(text);
+            }
         }
     }
 }
