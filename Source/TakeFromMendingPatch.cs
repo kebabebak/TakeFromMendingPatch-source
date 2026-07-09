@@ -39,6 +39,12 @@ using Verse.AI;
  * the intended TakeFrom behavior for both code paths with minimal surface area, while extra
  * bill-resolution logic addresses reference mismatches that HaulToBuilding alone does not handle
  * reliably in linked-bill setups.
+ *
+ * ExtraBillData load cleanup:
+ * HaulToBuilding persists Dictionary<Bill, ExtraBillData> in the save. Deleted bills (e.g.
+ * finished surgery Bill_RemoveBodyPart) deserialize as null keys and spam load errors. A postfix on
+ * GameComponent_ExtraBillData.ExposeData prunes null and dead bill keys after every load/save
+ * scribe pass; runtime ingredient search reuses the same prune helper.
  */
 namespace HSK.TakeFromMendingPatch
 {
@@ -230,9 +236,104 @@ namespace HSK.TakeFromMendingPatch
         }
     }
 
-    internal static class TakeFromMendingPatchLogic
+    [HarmonyPatch(typeof(GameComponent_ExtraBillData), nameof(GameComponent_ExtraBillData.ExposeData))]
+    internal static class ExtraBillDataExposeDataPatch
+    {
+        public static void Postfix(GameComponent_ExtraBillData __instance)
+        {
+            if (__instance == null)
+            {
+                return;
+            }
+
+            string route = Scribe.mode == LoadSaveMode.LoadingVars ? "load" : "save";
+            ExtraBillDataMaintenance.PruneStaleBillDataKeys(__instance, route);
+        }
+    }
+
+    internal static class ExtraBillDataMaintenance
     {
         private static FieldInfo extraBillDataDictionaryField;
+
+        internal static Dictionary<Bill, ExtraBillData> GetBillDataDictionary(GameComponent_ExtraBillData component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            extraBillDataDictionaryField ??= AccessTools.Field(typeof(GameComponent_ExtraBillData), "data");
+            return extraBillDataDictionaryField?.GetValue(component) as Dictionary<Bill, ExtraBillData>;
+        }
+
+        internal static bool IsBillDataKeyAlive(Bill bill)
+        {
+            if (bill == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return !bill.DeletedOrDereferenced;
+            }
+            catch (Exception ex)
+            {
+                PatchLog.Warning($"[TakeFromMendingPatch] Stale ExtraBillData bill key skipped: {ex.Message}");
+                return false;
+            }
+        }
+
+        internal static int PruneStaleBillDataKeys(GameComponent_ExtraBillData component, string route)
+        {
+            var dict = ExtraBillDataMaintenance.GetBillDataDictionary(component);
+            if (dict == null || dict.Count == 0)
+            {
+                return 0;
+            }
+
+            List<Bill> staleKeys = null;
+            int nullKeys = 0;
+            foreach (Bill key in dict.Keys.ToList())
+            {
+                if (key == null)
+                {
+                    nullKeys++;
+                    staleKeys ??= new List<Bill>();
+                    staleKeys.Add(null);
+                    continue;
+                }
+
+                if (IsBillDataKeyAlive(key))
+                {
+                    continue;
+                }
+
+                staleKeys ??= new List<Bill>();
+                staleKeys.Add(key);
+            }
+
+            if (staleKeys == null)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < staleKeys.Count; i++)
+            {
+                dict.Remove(staleKeys[i]);
+            }
+
+            string nullSuffix = nullKeys > 0 ? $", nullKeys={nullKeys}" : string.Empty;
+            string message =
+                $"[TakeFromMendingPatch] Pruned {staleKeys.Count} stale ExtraBillData bill key(s) during {route} " +
+                $"(dictionary now {dict.Count} entries{nullSuffix}).";
+            PatchLog.Maintenance(message);
+            return staleKeys.Count;
+        }
+    }
+
+    internal static class TakeFromMendingPatchLogic
+    {
 
         // When TakeFrom is set, search only selected storages; otherwise defer to vanilla + HaulToBuilding.
         internal static bool VanillaPrefix(
@@ -472,7 +573,7 @@ namespace HSK.TakeFromMendingPatch
                         {
                             continue;
                         }
-                        if (!IsBillDataKeyAlive(other))
+                        if (!ExtraBillDataMaintenance.IsBillDataKeyAlive(other))
                         {
                             PatchLog.Warning(
                                 $"[TakeFromMendingPatch] {route} skipped dead bill stack sibling for {DescribeBill(bill, pawn, billGiver)}.");
@@ -488,7 +589,7 @@ namespace HSK.TakeFromMendingPatch
                     }
                 }
 
-                int pruned = PruneStaleBillDataKeys(component, route);
+                int pruned = ExtraBillDataMaintenance.PruneStaleBillDataKeys(component, route);
                 if (pruned > 0)
                 {
                     PatchLog.Message($"[TakeFromMendingPatch] {route} continuing TakeFrom fallback after pruning {pruned} stale bill key(s).");
@@ -578,65 +679,10 @@ namespace HSK.TakeFromMendingPatch
             parents = extraData.TakeFrom.Where(parent => parent != null).ToList();
             return parents.Count > 0;
         }
-        private static bool IsBillDataKeyAlive(Bill bill)
-        {
-            if (bill == null)
-            {
-                return false;
-            }
-
-            try
-            {
-                return !bill.DeletedOrDereferenced;
-            }
-            catch (Exception ex)
-            {
-                PatchLog.Warning($"[TakeFromMendingPatch] Stale ExtraBillData bill key skipped: {ex.Message}");
-                return false;
-            }
-        }
-
-        private static int PruneStaleBillDataKeys(GameComponent_ExtraBillData component, string route)
-        {
-            var dict = GetBillDataDictionary(component);
-            if (dict == null || dict.Count == 0)
-            {
-                return 0;
-            }
-
-            List<Bill> staleKeys = null;
-            foreach (Bill key in dict.Keys.ToList())
-            {
-                if (IsBillDataKeyAlive(key))
-                {
-                    continue;
-                }
-
-                staleKeys ??= new List<Bill>();
-                staleKeys.Add(key);
-            }
-
-            if (staleKeys == null)
-            {
-                return 0;
-            }
-
-            for (int i = 0; i < staleKeys.Count; i++)
-            {
-                dict.Remove(staleKeys[i]);
-            }
-
-            string message =
-                $"[TakeFromMendingPatch] Pruned {staleKeys.Count} stale ExtraBillData bill key(s) during {route} " +
-                $"(dictionary now {dict.Count} entries).";
-            PatchLog.Maintenance(message);
-            return staleKeys.Count;
-        }
-
         private static IEnumerable<KeyValuePair<Bill, ExtraBillData>> EnumerateBillDataWithTakeFrom(
             GameComponent_ExtraBillData component)
         {
-            var dict = GetBillDataDictionary(component);
+            var dict = ExtraBillDataMaintenance.GetBillDataDictionary(component);
             if (dict == null)
             {
                 yield break;
@@ -644,7 +690,7 @@ namespace HSK.TakeFromMendingPatch
 
             foreach (var kv in dict)
             {
-                if (!IsBillDataKeyAlive(kv.Key) || !TryGetTakeFromFromData(kv.Value, out _))
+                if (!ExtraBillDataMaintenance.IsBillDataKeyAlive(kv.Key) || !TryGetTakeFromFromData(kv.Value, out _))
                 {
                     continue;
                 }
@@ -653,22 +699,13 @@ namespace HSK.TakeFromMendingPatch
             }
         }
 
-        private static Dictionary<Bill, ExtraBillData> GetBillDataDictionary(GameComponent_ExtraBillData component)
-        {
-            if (component == null)
-            {
-                return null;
-            }
-            extraBillDataDictionaryField ??= AccessTools.Field(typeof(GameComponent_ExtraBillData), "data");
-            return extraBillDataDictionaryField?.GetValue(component) as Dictionary<Bill, ExtraBillData>;
-        }
         private static void LogBillDataDiagnostics(Bill bill, GameComponent_ExtraBillData component)
         {
             if (!TakeFromMendingPatchSettings.EnableLogging)
             {
                 return;
             }
-            var dict = GetBillDataDictionary(component);
+            var dict = ExtraBillDataMaintenance.GetBillDataDictionary(component);
             int count = dict?.Count ?? 0;
             PatchLog.Message($"[TakeFromMendingPatch] ExtraBillData dictionary entries: {count}");
             if (dict == null)
@@ -677,7 +714,7 @@ namespace HSK.TakeFromMendingPatch
             }
             foreach (var kv in dict)
             {
-                if (!IsBillDataKeyAlive(kv.Key))
+                if (!ExtraBillDataMaintenance.IsBillDataKeyAlive(kv.Key))
                 {
                     PatchLog.Message("[TakeFromMendingPatch]   bill entry: <stale/dead key skipped>");
                     continue;
