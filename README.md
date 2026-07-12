@@ -1,6 +1,6 @@
 # TakeFromMendingPatch — build kit
 
---Ready to use patch is here: https://github.com/kebabebak/HSK-Take-From-Mending-Patch
+> Ready to use patch is here: https://github.com/kebabebak/HSK-Take-From-Mending-Patch
 
 Files to compile `TakeFromMendingPatch.dll` for RimWorld HSK 1.5.
 
