@@ -10,42 +10,6 @@ using UnityEngine;
 using Verse;
 using Verse.AI;
 
-/*
- * TakeFromMendingPatch
- *
- * Problem:
- * The "Take It To Storage!" mod (HaulToBuilding) adds a per-bill "Take from" stockpile list
- * (stored in ExtraBillData.TakeFrom) to restrict where pawns pick up bill ingredients.
- * HaulToBuilding patches vanilla RimWorld.WorkGiver_DoBill.TryFindBestBillIngredients for
- * standard crafting, but Core SK MendAndRecycle replaces that flow for mend/recycle bills with
- * Mending.WorkGiver_DoBill, which searches the whole map via GenClosest.ClosestThingReachable
- * and never reads TakeFrom. In HSK the same symptom can also appear on ordinary bills when
- * ExtraBillData is keyed to a different Bill instance than the one used at job time (e.g.
- * Better Workbench Management linked or mirrored bills): TakeFrom looks configured in the UI,
- * yet pawns still haul from the nearest stockpile on the map.
- *
- * Solution:
- * Harmony prefixes (and a vanilla postfix safety net) intercept ingredient search before the
- * unconstrained path runs. When TakeFrom is non-empty, ExtraBillData is resolved for the active
- * bill (direct lookup, siblings on the same BillStack, same workbench, or same recipe on the
- * map), candidate things are gathered only from the selected storages (slot HeldThings plus items
- * on stockpile zone cells), validated like vanilla, and chosen from that set only. Mend bills
- * use the same TakeFrom list but Mending-specific ingredient rules. If another mod already
- * returned ingredients from a disallowed storage, the postfix reruns the constrained search.
- *
- * Why this approach:
- * MendAndRecycle cannot be fixed without forking it, and HaulToBuilding's UI or data storage
- * need not be duplicated. Patching the shared choke point (TryFindBestBillIngredients) restores
- * the intended TakeFrom behavior for both code paths with minimal surface area, while extra
- * bill-resolution logic addresses reference mismatches that HaulToBuilding alone does not handle
- * reliably in linked-bill setups.
- *
- * ExtraBillData load cleanup:
- * HaulToBuilding persists Dictionary<Bill, ExtraBillData> in the save. Deleted bills (e.g.
- * finished surgery Bill_RemoveBodyPart) deserialize as null keys and spam load errors. A postfix on
- * GameComponent_ExtraBillData.ExposeData prunes null and dead bill keys after every load/save
- * scribe pass; runtime ingredient search reuses the same prune helper.
- */
 namespace HSK.TakeFromMendingPatch
 {
     public static class ModCompatibility
@@ -69,6 +33,43 @@ namespace HSK.TakeFromMendingPatch
         }
     }
 
+    /// <summary>
+    /// Problem: the "Take It To Storage!" mod (HaulToBuilding) adds a per-bill "Take from"
+    /// stockpile list (ExtraBillData.TakeFrom). It patches vanilla
+    /// WorkGiver_DoBill.TryFindBestBillIngredients for crafting, but Core SK MendAndRecycle
+    /// replaces mend/recycle with Mending.WorkGiver_DoBill, which searches the whole map via
+    /// ClosestThingReachable and never reads TakeFrom. The same symptom can hit ordinary bills
+    /// when ExtraBillData is keyed to a different Bill instance than the job (e.g. Better
+    /// Workbench Management linked/mirrored bills): UI shows TakeFrom, pawns still haul from the
+    /// nearest stockpile.
+    ///
+    /// Fix: Harmony prefixes (plus a vanilla postfix safety net) intercept ingredient search
+    /// before the unconstrained path. When TakeFrom is non-empty, ExtraBillData is resolved for
+    /// the active bill (direct lookup, BillStack siblings, same workbench, or same recipe on the
+    /// map), candidates come only from selected storages, validated like vanilla. Mend bills use
+    /// Mending-specific ingredient rules. Postfix re-runs constrained search if another mod
+    /// already returned disallowed storages. Prefix skip is required to intercept before
+    /// HaulToBuilding / MendAndRecycle run unconstrained search when TakeFrom is set.
+    /// ExtraBillData cleanup: postfix on GameComponent_ExtraBillData.ExposeData prunes null/dead
+    /// bill keys that otherwise spam load errors after deleted bills deserialize.
+    ///
+    /// Проблема: мод "Take It To Storage!" (HaulToBuilding) добавляет per-bill список "Take from"
+    /// (ExtraBillData.TakeFrom). Патчит vanilla TryFindBestBillIngredients для крафта, но Core SK
+    /// MendAndRecycle подменяет mend/recycle на Mending.WorkGiver_DoBill, который ищет по всей
+    /// карте через ClosestThingReachable и не читает TakeFrom. Тот же симптом бывает на обычных
+    /// биллях, если ExtraBillData привязан к другому Bill, чем job (например linked/mirrored bills
+    /// Better Workbench Management): в UI TakeFrom настроен, пешки всё равно берут с ближайшего
+    /// склада.
+    ///
+    /// Исправление: Harmony Prefix (плюс Postfix-страховка на vanilla) перехватывают поиск
+    /// ингредиентов до неограниченного пути. При непустом TakeFrom ExtraBillData резолвится для
+    /// активного bill (прямой lookup, сиблинги BillStack, тот же верстак или тот же recipe на
+    /// карте); кандидаты только из выбранных складов. Mend использует правила Mending. Postfix
+    /// повторяет ограниченный поиск, если другой мод уже вернул запрещённые склады. Prefix skip
+    /// нужен, чтобы перехватить до HaulToBuilding / MendAndRecycle при установленном TakeFrom.
+    /// Очистка ExtraBillData: Postfix GameComponent_ExtraBillData.ExposeData удаляет null/мёртвые
+    /// ключи bill, иначе после удалённых билл спамят ошибки load.
+    /// </summary>
     public class TakeFromMendingPatchMod : Mod
     {
         private const string HarmonyId = "kebabebak.takefrom.mending.patch";
